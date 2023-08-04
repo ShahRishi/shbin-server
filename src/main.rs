@@ -13,29 +13,68 @@ use std::path::PathBuf;
 #[post("/push")]
 async fn push(mut payload: Multipart) -> Result<HttpResponse, Error> {
     // remove all files from /bin
-    fs::remove_dir_all("./bin").unwrap();
-    fs::create_dir("./bin").unwrap();
-    
+    if let Err(e) = fs::remove_dir_all("./bin") {
+        eprintln!("Error removing directory: {}", e);
+        return Ok(HttpResponse::InternalServerError().finish());
+    }
+    if let Err(e) = fs::create_dir("./bin") {
+        eprintln!("Error creating directory: {}", e);
+        return Ok(HttpResponse::InternalServerError().finish());
+    }
+
     // create new file to write payload to
-    let mut file = File::create("./bin/packet.zip").await.unwrap();
+    let mut file = match File::create("./bin/packet.zip").await {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("Error creating file: {}", e);
+            return Ok(HttpResponse::InternalServerError().finish());
+        }
+    };
 
     // read data stream and write to packet.zip in bin
     while let Some(item) = payload.next().await {
-        let mut field = item?;
+        let mut field = match item {
+            Ok(field) => field,
+            Err(e) => {
+                eprintln!("Error reading field: {}", e);
+                return Ok(HttpResponse::InternalServerError().finish());
+            }
+        };
 
         while let Some(chunk) = field.next().await {
-            let data = chunk?.to_vec();
-            file.write_all(&data).await?;
+            let data = match chunk {
+                Ok(data) => data.to_vec(),
+                Err(e) => {
+                    eprintln!("Error reading chunk: {}", e);
+                    return Ok(HttpResponse::InternalServerError().finish());
+                }
+            };
+            if let Err(e) = file.write_all(&data).await {
+                eprintln!("Error writing data: {}", e);
+                return Ok(HttpResponse::InternalServerError().finish());
+            }
         }
     }
 
     // extract packet.zip into /bin
     let bin = PathBuf::from("./bin"); 
-    let archive: Vec<u8> = fs::read("./bin/packet.zip").unwrap();
-    zip_extract::extract(Cursor::new(archive), &bin, true).unwrap();
+    let archive = match fs::read("./bin/packet.zip") {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Error reading file: {}", e);
+            return Ok(HttpResponse::InternalServerError().finish());
+        }
+    };
+    if let Err(e) = zip_extract::extract(Cursor::new(archive), &bin, true) {
+        eprintln!("Error extracting file: {}", e);
+        return Ok(HttpResponse::InternalServerError().finish());
+    }
 
     // remove packet.zip from /bin
-    let _ = fs::remove_file("./bin/packet.zip");
+    if let Err(e) = fs::remove_file("./bin/packet.zip") {
+        eprintln!("Error removing file: {}", e);
+        return Ok(HttpResponse::InternalServerError().finish());
+    }
 
     // Return a response
     Ok(HttpResponse::Ok().finish())
